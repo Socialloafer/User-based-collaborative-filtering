@@ -1,0 +1,254 @@
+# This is the code for the standardized Hellinger distance calculations. The formula and how it works is described in the paper.
+
+
+
+fulldata2 <- read.csv(file = "D:/Skola/Statestik Umea/Magister uppsats/Collaborative Filtering Dataset/dataset/Ny data/ml-latest-small/ratings.csv", sep = ";", header = TRUE)
+
+fulldata2$rating[fulldata2$rating == 0.5] <- 1
+fulldata2$rating[fulldata2$rating == 1.5] <- 2
+fulldata2$rating[fulldata2$rating == 2.5] <- 3
+fulldata2$rating[fulldata2$rating == 3.5] <- 4
+fulldata2$rating[fulldata2$rating == 4.5] <- 5
+
+
+#creating a smaller dataset
+set.seed(22)
+index <- sample(unique(fulldata2$userId), size = 100, replace = FALSE)
+fulldata3 <- fulldata2[fulldata2$userId %in% index,]
+
+
+# renaming for simplicity. will not matter as the different datasets will not be compared to eachother
+for (i in 1:length(unique(fulldata3$userId))) {
+  fulldata3$userId[(fulldata3$userId == unique(fulldata3$userId)[i])] <- i
+}
+
+index2 <- sample(unique(fulldata3$userId), size = 30, replace = FALSE) #select 30 random users as test data
+
+
+#subsetting 20% of the unique items that are rated by the 30 randomly selected users without replacement to use as test data
+index_movie <- sample(unique(fulldata3$movieId[unique(fulldata3$userId) %in% index2]),
+                      size = 0.2*length(unique(fulldata3$movieId[unique(fulldata3$userId) %in% index2])), replace=FALSE)
+
+
+# remove the items from the dataset given selected users and items
+test_movieId <- fulldata3[fulldata3$movieId %in% index_movie & fulldata3$userId %in% index2,]
+fulldata <- fulldata3[!(fulldata3$movieId %in% index_movie & fulldata3$userId %in% index2),]
+
+
+#function to index the unique movieId's for user U
+find_items <- function(fulldata,U)
+{  return( unique ( fulldata[fulldata$userId == U,]$movieId) )
+}
+
+#index unique movieId's for user U and V
+find_items_both <- function(fulldata,U,V)
+{ Uset <- find_items(fulldata,U)
+Vset <- find_items(fulldata,V)
+UV <- intersect(Uset,Vset)
+return( UV)
+}
+
+###################################   BC value between item i and item j
+cal_bc_items <- function( fulldata, i, j )       # rating distributions for items i and j are p1 and p2
+{                                                                 # firstly make sure that p1 and p2 are of length 5
+  p1  <- as.vector(c(0,0,0,0,0))
+  p2  <-  as.vector(c(0,0,0,0,0))
+  p11  <- fulldata$rating[fulldata$movieId == i ]
+  p22  <- fulldata$rating[fulldata$movieId == j ]
+  for (i in 1:(length(p11)))  p1[ p11[i] ] <- p1[ p11[i] ]+1
+  for (i in 1:(length(p22)))  p2[ p22[i] ] <- p2[ p22[i] ]+1
+  if ( sum(p1) == 0)  p1 <- as.vector(c(0.2,0.2,0.2,0.2,0.2))
+  if ( sum(p2) == 0)  p2 <- as.vector(c(0.2,0.2,0.2,0.2,0.2))
+  p1 <- p1/sum(p1)
+  p2 <- p2/sum(p2)
+  bc <- 0
+  for (i in 1:length(p1))
+    bc <- bc + sqrt (p1[i] * p2[i])
+  bc <- round( bc, 4 )
+  return(bc)
+}
+
+hell_coef_items <- function( fulldata, I, J )
+{ if ( I != J) hell_co <- sqrt( 1- cal_bc_items( fulldata, I, J ))
+else hell_co <- 0
+return(hell_co)
+}
+
+cal_hc_furthest_I <- function( fulldata, I ) {
+  p1  <- as.vector(c(0,0,0,0,0))
+  p11  <- fulldata$rating[fulldata$movieId == I ]
+  for (i in 1:(length(p11)))  p1[ p11[i] ] <- p1[ p11[i] ]+1
+  p1 <- p1/sum( p1 )
+  minU <- min( p1 )
+  bc <- sqrt ( minU)                                                            # BC value between ditriibution of U and its furtherest distribution
+  hc  <-  sqrt( 1 - bc )
+  return( hc )
+}
+
+
+
+hell_coef_std_items <- function( fulldata, I, J ) #  this is basically;  similarity_HC(I,J) = 1 - HC(I,J) / sqrt((HC1(I,J)*HC2(I,J))
+{  hell_I_J <- hell_coef_items( fulldata, I, J )
+hc_furtherst_I  <-   cal_hc_furthest_I( fulldata, I )
+hc_furtherst_J  <-   cal_hc_furthest_I( fulldata, J )
+if ( ( hc_furtherst_I > 0 ) & ( hc_furtherst_J > 0) )
+  hell_coef_st   <- 1 - ( hell_I_J  / sqrt( hc_furtherst_I * hc_furtherst_J ) )
+else
+  hell_coef_st   <- 1
+return(hell_coef_st)
+}
+
+Jacc <- function(fulldata, U, V)
+{  jacc <- 0
+if (  length(unique(intersect(find_items(fulldata,2),find_items(fulldata,1))))   > 0 )
+  jacc <- jacc +   length(unique(intersect(find_items(fulldata,2),find_items(fulldata,1)))) /  length(unique(union(find_items(fulldata,2),find_items(fulldata,1))))
+return(jacc)
+}
+
+Loc_corr <- function( fulldata, U, V, i, j )   # function to calculate local correlation between user U rating item i and user V rating item j
+{ r_U <- mean( fulldata[fulldata$userId == U,]$rating )
+r_V <- mean( fulldata[fulldata$userId == V,]$rating )
+sd_U <- sd( fulldata[fulldata$userId == U,]$rating )
+sd_V <- sd( fulldata[fulldata$userId == V,]$rating )
+temp <-  ( fulldata[((fulldata$userId == U) & (fulldata$movieId == i)),]$rating - r_U ) * ( fulldata[((fulldata$userId == V ) & (fulldata$movieId == j)),]$rating - r_V ) / ( sd_U * sd_V )
+return(temp)
+}
+
+sUV_Hell_corr <- function( fulldata, U, V)
+{  I_U <- find_items(fulldata,U)
+I_V <- find_items(fulldata,V)
+sUV <- 0
+for ( i in 1:length(I_U) )
+  for ( j in 1:length(I_V) )
+    sUV <- sUV + Jacc(fulldata, U, V) + hell_coef_std_items( fulldata, I_U[i], I_V[j] ) * Loc_corr( fulldata,U,V, I_U[i], I_V[j] )
+return(sUV)
+}
+
+
+
+sim_coef <- function( fulldata, U ){
+  sub_set <- subset( fulldata, fulldata$userId != U)
+  unique_userId <- unique(sub_set$userId)
+  high_val <- matrix( nrow = length( unique_userId ), ncol=2)
+  for ( V in 1:length( unique_userId ) ) {
+    high_val[ V, ] <- c( sUV_Hell_corr( fulldata, U, unique_userId[V] ), unique_userId[V] )
+    print(c(V/length(unique_userId), U))
+  }
+  high_val[is.na(high_val)] <- 0
+  colnames( high_val ) <- c( "Coefficient", "userId" )
+  return( as.data.frame( high_val ) )
+}
+
+
+#prediction function, returns predicted value for the movies given user.
+prediction <- function(fulldata, U, K, coefficient) {
+  k_ <- coefficient[order(coefficient$Coefficient, decreasing = TRUE,na.last = TRUE),2][1:K]
+  select_k_users <- coefficient[coefficient[,2] %in% k_,] #get the users that are closest
+  r_U <- mean(fulldata[fulldata$userId == U,]$rating) #get the mean of user U:s ratings
+  i_U <- unique(test_movieId[test_movieId$userId ==  U,]$movieId) #get all the movieId:s for user U
+  top <- 0
+  bottom <- 0
+  prediction <- matrix(nrow = length(i_U), ncol = 2)
+  for (q in 1:length(i_U)) { #create a loop for every movieId of user U
+    counter <- 0
+    for (j in 1:length(select_k_users$userId)) { #create a loop for k-users that were chosen as closest
+
+      if (i_U[q] %in% fulldata[fulldata$userId == select_k_users$userId[j],]$movieId){
+
+        avg_r <- mean(fulldata[fulldata$userId == select_k_users$userId[j],]$rating) # calculate the avarage rating of k_j user
+        r_k_i <- fulldata[fulldata$userId == select_k_users$userId[j] & fulldata$movieId == i_U[q],]$rating #finding the rating of user j on utem q
+        top <- top + (select_k_users$Coefficient[j]*(r_k_i-avg_r)) #here we take the coefficient s(U,V) and multiply it with the difference
+        bottom <- bottom + abs(select_k_users$Coefficient[j])
+
+        counter <- counter+1
+      }
+    }
+    if(counter == 0){
+      prediction[q,1] <- r_U
+    }
+    if(counter > 0){
+      prediction[q,1] <- r_U + top/bottom
+    }
+    prediction[q,2]<- i_U[q]
+
+  }
+  colnames(prediction) <- c("Predicted_value", "movieId")
+  prediction[prediction[,1] >= 0.5 & prediction[,1] < 1.5,1] <- 1
+  prediction[prediction[,1] >= 1.5 & prediction[,1] < 2.5,1] <- 2
+  prediction[prediction[,1] >= 2.5 & prediction[,1] < 3.5,1] <- 3
+  prediction[prediction[,1] >= 3.5 & prediction[,1] < 4.5,1] <- 4
+  prediction[prediction[,1] >= 4.5,1] <- 5
+  return(as.data.frame(prediction))
+}
+
+#setting upp the amount of K-closest neighbours to use.
+k = c(5,10,15,20,25,50,75,95)
+
+# predicted values of movies for user U given K.
+K_sim_values <- function(U){
+  len <- length(k)
+  coefficient <- sim_coef(fulldata, U)
+  prediction_user <- array(0,dim=c(len))
+  for (i in 1:len) {
+    prediction_user[i] <- prediction(fulldata, U, k[i], coefficient)
+  }
+  prediction_user <- as.data.frame(prediction_user)
+  colnames(prediction_user) <- paste("K=[",k[1:len],"]", sep="")
+  prediction_user$movieId <- test_movieId$movieId[test_movieId$userId == U]
+  return(list(as.data.frame(prediction_user), as.data.frame(coefficient)))
+}
+
+# Last step, evaluation of this method. Calculation of MAE, RMSE, precission, recall and f-value of different K values.
+# Returns a table with all the values.
+MAE_RMSE <- function(Z){
+  dif_MAE <- c(rep(0, length(k)))
+  MAX_MAE  <- c(rep(0, length(k)))
+  dif_RMSE <- c(rep(0, length(k)))
+  MAX_RMSE <- c(rep(0, length(k)))
+  numirator <- c(rep(0, length(k)))
+  Prec_denominator <- c(rep(0, length(k)))
+  Rec_denominator <- c(rep(0, length(k)))
+  results <- matrix()
+  closest_users <- list()
+  for (i in 1:Z){
+    both <- K_sim_values(unique(test_movieId$userId)[i])
+    predis <- as.data.frame(both[[1]])
+    print(sum(is.na(predis)))
+    predis[is.na(predis)] <- round(mean(fulldata$rating[fulldata$userId == test_movieId$userId[i]]), digits = 0)
+    users <- as.data.frame(both[[2]])
+    sorted <- users[order(users$Coefficient, decreasing = TRUE,na.last = TRUE),2][1:Z]
+    for(K in 1:length(k)){
+      dif_MAE[[K]] <- dif_MAE[[K]] + sum(abs(predis[,K] - test_movieId$rating[test_movieId$userId == unique(test_movieId$userId)[i]]))
+      dif_RMSE[[K]] <- dif_RMSE[[K]] + sum((predis[,K] - test_movieId$rating[test_movieId$userId == unique(test_movieId$userId)[i]])^2)
+      N <- length(unique(test_movieId$movieId[test_movieId$userId == unique(test_movieId$userId)[i]]))
+      if(length(N) != 0)
+        MAX_MAE[[K]] <- MAX_MAE[[K]] + N
+      MAX_RMSE[[K]] <- MAX_RMSE[[K]] + N
+      L_r <- predis$movieId[predis[,K]>=4]  # movieId:s that should be recommended to the user as predictions are >=4
+      L_rev <- test_movieId$movieId[test_movieId$userId == unique(test_movieId$userId)[i] & test_movieId$rating >=4]
+      if( length(unique(intersect(L_r,L_rev))) > 0 )
+        numirator[[K]] <- numirator[[K]] + length(unique(intersect(L_r,L_rev))) #numirator for precision and recall
+      Prec_denominator[[K]] <- Prec_denominator[[K]] + length(unique(L_r)) #denominator for precision
+      Rec_denominator[[K]] <- Rec_denominator[[K]] + length(unique(L_rev))
+    }
+    closest_users[[i]] <- sorted
+    print(i/Z)
+  }
+  prec <- numirator/Prec_denominator
+  rec <- numirator/Rec_denominator
+  F_score <- (2*prec*rec)/(prec+rec)
+  MAE_res <- dif_MAE/MAX_MAE
+  RMSE_res <- sqrt(dif_RMSE/MAX_RMSE)
+  result <- data.frame(MAE_res,RMSE_res, prec, rec, F_score)
+  result$K <- k
+  colnames(result) <- c("MAE_res","RMSE_res", "Precission", "Recall", "F_score", "K")
+  return(list(result, closest_users))
+}
+
+#Produce a dataframe with results.
+SHC_30 <- MAE_RMSE(length(index2))
+res_SHC <- as.data.frame(SHC_30[[1]])
+closest_users_SHC <- as.data.frame(SHC_30[[2]])
+
+#this will return a table of ranked by the "closest to given user". To see which users had biggest impact in perdictions.
+colnames(closest_users_SHC) <- unique(test_movieId$userId)
