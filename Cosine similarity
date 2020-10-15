@@ -1,8 +1,7 @@
 # This is the code for the cosine similarity measure. The formula and how it works is described in the paper.
 
 
-#adding data
-fulldata2 <- read.csv(file = "D:/Skola/Statestik Umea/Magister uppsats/Collaborative Filtering Dataset/dataset/ratings.csv", sep = ";", header = TRUE)
+fulldata2 <- read.csv(file = "D:/Skola/Statestik Umea/Magister uppsats/Collaborative Filtering Dataset/dataset/Ny data/ml-latest-small/ratings.csv", sep = ";", header = TRUE)
 
 fulldata2$rating[fulldata2$rating == 0.5] <- 1
 fulldata2$rating[fulldata2$rating == 1.5] <- 2
@@ -11,17 +10,29 @@ fulldata2$rating[fulldata2$rating == 3.5] <- 4
 fulldata2$rating[fulldata2$rating == 4.5] <- 5
 
 
-#creating a smaller dataset to reduce time for calculations due to time constraing for this project.
+#creating a smaller dataset
 set.seed(55)
 index <- sample(unique(fulldata2$userId), size = 100, replace = FALSE)
-fulldata <- fulldata2[fulldata2$userId %in% index,]
+fulldata3 <- fulldata2[fulldata2$userId %in% index,]
 
-length(unique(fulldata$movieId))
 
 # renaming for simplicity. will not matter as the different datasets will not be compared to eachother
-for (i in 1:length(unique(fulldata$userId))) {
-  fulldata$userId[(fulldata$userId == unique(fulldata$userId)[i])] <- i
+for (i in 1:length(unique(fulldata3$userId))) {
+  fulldata3$userId[(fulldata3$userId == unique(fulldata3$userId)[i])] <- i
 }
+
+index2 <- sample(unique(fulldata3$userId), size = 30, replace = FALSE) #select 30 random users as test data
+
+
+#subsetting 20% of the unique items that are rated by the 30 randomly selected users without replacement to use as test data
+index_movie <- sample(unique(fulldata3$movieId[unique(fulldata3$userId) %in% index2]),
+                      size = 0.2*length(unique(fulldata3$movieId[unique(fulldata3$userId) %in% index2])), replace=FALSE)
+
+
+# remove the items from the dataset given selected users and items
+test_movieId <- fulldata3[fulldata3$movieId %in% index_movie & fulldata3$userId %in% index2,]
+fulldata <- fulldata3[!(fulldata3$movieId %in% index_movie & fulldata3$userId %in% index2),]
+
 
 #function to index the unique movieId's for user U
 find_items <- function(fulldata,U)
@@ -36,7 +47,7 @@ UV <- intersect(Uset,Vset)
 return( UV)
 }
 
-#cosine similarity function
+#Cosine similarity function
 sUV_cos <- function(fulldata,U,V) {
   I_U_V <- find_items_both(fulldata, U, V)
   if(length(I_U_V) == 0) #some do not have any common items
@@ -55,23 +66,23 @@ sUV_cos <- function(fulldata,U,V) {
   return(term)
 }
 
-
-#cacluclating the similarity values for a given user and saving them into a dataframe. 
+#cacluclating the similarity values for a given user and saving them into a dataframe.
 sim_coef <- function(fulldata, U) {
-  sub_set <- subset(fulldata, fulldata$userId !=U)
+  sub_set <- subset(fulldata, fulldata$userId != U)
   high_val <- matrix(nrow = length(unique(sub_set$userId)), ncol=2)
   for (V in 1:length(unique(sub_set$userId)))
     high_val[V,] <- c(sUV_cos(fulldata, U, unique(sub_set$userId)[V]), unique(sub_set$userId)[V])
   colnames(high_val) <- c("Coefficient", "userId")
+  high_val[is.na(high_val)] <- 0
   return(as.data.frame(high_val))
 }
 
 #prediction function, returns predicted value for the movies given user.
 prediction <- function(fulldata, U, K, coefficient) {
-  k_ <- sort(coefficient[,1], na.last= TRUE, decreasing = TRUE)[1:K]
-  select_k_users <- coefficient[coefficient[,1] %in% k_,] #get the users that are closest
+  k_ <- coefficient[order(coefficient$Coefficient, decreasing = TRUE,na.last = TRUE),2][1:K]
+  select_k_users <- coefficient[coefficient[,2] %in% k_,] #get the users that are closest
   r_U <- mean(fulldata[fulldata$userId == U,]$rating) #get the mean of user U:s ratings
-  i_U <- unique(fulldata[fulldata$userId == U,]$movieId) #get all the movieId:s for user U
+  i_U <- unique(test_movieId[test_movieId$userId ==  U,]$movieId) #get all the movieId:s for user U
   top <- 0
   bottom <- 0
   prediction <- matrix(nrow = length(i_U), ncol = 2)
@@ -108,7 +119,7 @@ prediction <- function(fulldata, U, K, coefficient) {
 }
 
 #setting upp the amount of K-closest neighbours to use.
-k = c(5,10,15,20,30)
+k = c(5,10,15,20,25,50,75,95)
 
 # predicted values of movies for user U given K.
 K_sim_values <- function(U){
@@ -116,49 +127,68 @@ K_sim_values <- function(U){
   coefficient <- sim_coef(fulldata, U)
   prediction_user <- array(0,dim=c(len))
   for (i in 1:len) {
-    prediction_user[i] <- prediction(fulldata,U,k[i],coefficient)
+    prediction_user[i] <- prediction(fulldata, U, k[i], coefficient)
   }
   prediction_user <- as.data.frame(prediction_user)
   colnames(prediction_user) <- paste("K=[",k[1:len],"]", sep="")
-  prediction_user$movieId <- fulldata$movieId[fulldata$userId == U]
-  return(as.data.frame(prediction_user))
+  prediction_user$movieId <- test_movieId$movieId[test_movieId$userId == U]
+  return(list(as.data.frame(prediction_user), as.data.frame(coefficient)))
 }
 
-# Last step, evaluation of this method. Calculation of MAE, RMSE, precission, recall and f-value of different K values. Returns a table with all the values.
+# Last step, evaluation of this method. Calculation of MAE, RMSE, precission, recall and f-value of different K values.
+# Returns a table with all the values.
 MAE_RMSE <- function(Z){
-  dif_MAE <- c(0,0,0,0,0)
-  MAX_MAE  <- c(0,0,0,0,0)
-  dif_RMSE <- c(0,0,0,0,0)
-  MAX_RMSE <- c(0,0,0,0,0)
-  numirator <- c(0,0,0,0,0)
-  Prec_denominator <- c(0,0,0,0,0)
-  Rec_denominator <- c(0,0,0,0,0)
+  dif_MAE <- c(rep(0, length(k)))
+  MAX_MAE  <- c(rep(0, length(k)))
+  dif_RMSE <- c(rep(0, length(k)))
+  MAX_RMSE <- c(rep(0, length(k)))
+  numirator <- c(rep(0, length(k)))
+  Prec_denominator <- c(rep(0, length(k)))
+  Rec_denominator <- c(rep(0, length(k)))
   results <- matrix()
+  closest_users <- list()
   for (i in 1:Z){
-    predis <- K_sim_values(i)
+    both <- K_sim_values(unique(test_movieId$userId)[i])
+    predis <- as.data.frame(both[[1]])
+    print(sum(is.na(predis)))
+    predis[is.na(predis)] <- round(mean(fulldata$rating[fulldata$userId == test_movieId$userId[i]]), digits = 0)
+    users <- as.data.frame(both[[2]])
+    sorted <- users[order(users$Coefficient, decreasing = TRUE,na.last = TRUE),2][1:Z]
     for(K in 1:length(k)){
-      dif_MAE[[K]] <- dif_MAE[[K]] + sum(abs(predis[,K] - fulldata$rating[fulldata$userId == i]))
-      MAX_MAE[[K]] <- MAX_MAE[[K]] + length(unique(fulldata$movieId[fulldata$userId == i]))
-      dif_RMSE[[K]] <- dif_RMSE[[K]] + sum((predis[,K] - fulldata$rating[fulldata$userId == i])^2)
-      MAX_RMSE[[K]] <- MAX_RMSE[[K]] + length(unique(fulldata$movieId[fulldata$userId == i]))
-      print(c((i/Z),K))
-      L_r <- predis$movieId[predis[,K]>=4]  # movieId:s that should be reccomended to the user as predictions are >=4
-      L_rev <- fulldata$movieId[fulldata$userId == i & fulldata$rating >=4]
+      dif_MAE[[K]] <- dif_MAE[[K]] + sum(abs(predis[,K] - test_movieId$rating[test_movieId$userId == unique(test_movieId$userId)[i]]))
+      dif_RMSE[[K]] <- dif_RMSE[[K]] + sum((predis[,K] - test_movieId$rating[test_movieId$userId == unique(test_movieId$userId)[i]])^2)
+      N <- length(unique(test_movieId$movieId[test_movieId$userId == unique(test_movieId$userId)[i]]))
+      if(length(N) != 0)
+        MAX_MAE[[K]] <- MAX_MAE[[K]] + N
+      MAX_RMSE[[K]] <- MAX_RMSE[[K]] + N
+      L_r <- predis$movieId[predis[,K]>=4]  # movieId:s that should be recommended to the user as predictions are >=4
+      L_rev <- test_movieId$movieId[test_movieId$userId == unique(test_movieId$userId)[i] & test_movieId$rating >=4]
       if( length(unique(intersect(L_r,L_rev))) > 0 )
         numirator[[K]] <- numirator[[K]] + length(unique(intersect(L_r,L_rev))) #numirator for precision and recall
       Prec_denominator[[K]] <- Prec_denominator[[K]] + length(unique(L_r)) #denominator for precision
       Rec_denominator[[K]] <- Rec_denominator[[K]] + length(unique(L_rev))
     }
+    closest_users[[i]] <- sorted
+    print(i/Z)
   }
   prec <- numirator/Prec_denominator
   rec <- numirator/Rec_denominator
   F_score <- (2*prec*rec)/(prec+rec)
   MAE_res <- dif_MAE/MAX_MAE
-  RMSE_res <- dif_RMSE/MAX_RMSE
+  RMSE_res <- sqrt(dif_RMSE/MAX_RMSE)
   result <- data.frame(MAE_res,RMSE_res, prec, rec, F_score)
   result$K <- k
   colnames(result) <- c("MAE_res","RMSE_res", "Precission", "Recall", "F_score", "K")
-  return(result)
+  return(list(result, closest_users))
 }
 
-Cosine_20 <- MAE_RMSE(20)
+#Produce a dataframe with results.
+Cosine_30 <- MAE_RMSE(length(index2))
+res_cosine <- as.data.frame(Cosine_30[[1]])
+closest_users_Cosine <- as.data.frame(Cosine_30[[2]])
+
+#this will return a table of ranked by the "closest to given user". To see which users had biggest impact in perdictions.
+colnames(closest_users_Cosine) <- unique(test_movieId$userId)
+
+
+
