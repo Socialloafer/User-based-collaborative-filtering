@@ -11,7 +11,7 @@ fulldata2$rating[fulldata2$rating == 4.5] <- 5
 
 
 #creating a smaller dataset
-set.seed(55)
+set.seed(22)
 index <- sample(unique(fulldata2$userId), size = 100, replace = FALSE)
 fulldata3 <- fulldata2[fulldata2$userId %in% index,]
 
